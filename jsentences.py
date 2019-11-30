@@ -46,8 +46,7 @@ class Mecab():
         return res
 
 
-def mecabize(db):
-    m: Mecab = Mecab()
+def mecabize(m: Mecab, db):
     with db.cursor(cursor_factory=psycopg2.extras.DictCursor) as read_cur:
         with db.cursor() as write_cur:
             read_cur.execute('select id, jpn from sentences')
@@ -62,19 +61,53 @@ def mecabize(db):
                     for idx, entry in enumerate(entries)
                     for x in (record['id'], idx, entry.word, entry.normalized())
                 ))
+                # We don't want a wall too big
                 if i % 1000 == 0:
                     db.commit()
+            db.commit()
+
+def add_sentence(db, entries: List[MecabEntry]):
+    with db.cursor() as cur:
+        cur.execute('select coalesce(max(lvl)+1, 0) from sentence_words')
+        new_level = cur.fetchone()[0]
+        cur.execute(
+            'with known as (select id from features where feature in (' +
+            ','.join(['%s'] * len(entries)) + ') order by id)'
+            'update sentence_words '
+            '   set lvl = %s '
+            ' where f_id in (select * from known) and lvl is null',
+            (*[e.normalized() for e in entries], new_level),
+        )
+        db.commit()
+        print('Updated {} words with new level {}'.format(cur.rowcount, new_level))
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest='cmd')
     subparsers.required = True
+
     mecabize_subparser = subparsers.add_parser('mecabize',
         help='Runs mecab for all the sentences in the database.'
     )
+
+    add_sentence_subparser = subparsers.add_parser('add_sentence',
+        help='Given a new sentence that you understand, a new level is created and all known words are marked in the db.'
+    )
+    add_sentence_subparser.add_argument('sentence',
+        help='A gramatically correct, understood japanese sentence.'
+    )
+
     args = parser.parse_args()
 
     if args.cmd == 'mecabize':
+        m = Mecab()
         db = psycopg2.connect('dbname=jsentences')
-        mecabize(db)
+        mecabize(m, db)
+        db.close()
+
+    elif args.cmd == 'add_sentence':
+        m = Mecab()
+        db = psycopg2.connect('dbname=jsentences')
+        add_sentence(db, m(args.sentence))
         db.close()
