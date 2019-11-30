@@ -13,3 +13,5 @@ analyze temp_sentences;
 analyze temp_links;
 
 insert into sentences select id, txt, a from temp_sentences t1, lateral (select coalesce(array_agg(txt)) a from temp_sentences t2 join temp_links on tid=t2.id where sid=t1.id) s where lang='jpn' and a is not null;
+
+drop table temp_sentences, temp_links;
