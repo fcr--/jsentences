@@ -5,6 +5,8 @@ Script to build an anki dict from tatoeba sentences, sorted by the knowledge of 
 
 You'll need `Mecab`, a simple way to install it, is by doing `apt-get install mecab mecab mecab-naist-jdic`.  Make sure it's on your path if you install it from the source code.
 
+Also, make sure you have all the dependencies for building psycopg2, including `python3.7-dev` (or the version you are using), `postgresql-server-dev-10` (or the version you're using)... and don't forget about gcc and friends...
+
 Start by clonning the repo, then `cd` into it.
 
 ```bash
