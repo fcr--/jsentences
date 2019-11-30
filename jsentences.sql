@@ -3,7 +3,7 @@ drop table if exists sentence_words, features, sentences;
 create table sentences(
     id int primary key,
     jpn text not null,
-    translations text[] not null default '{}',
+    translations text[] not null default '{}'
 );
 
 create table features(
