@@ -19,6 +19,7 @@ create table sentence_words(
     lvl int,
     primary key(s_id, idx)
 );
+create index on sentence_words(lvl);
 
 create or replace function feature(jptext text) returns int as $$
     declare

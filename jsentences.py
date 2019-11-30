@@ -64,6 +64,11 @@ def mecabize(m: Mecab, db):
                 # We don't want a wall too big
                 if i % 1000 == 0:
                     db.commit()
+            write_cur.execute("""
+                drop table if exists features_count;
+                select f_id, count(*) n into features_count from sentence_words group by f_id;
+                alter table features_count add primary key(f_id);
+            """)
             db.commit()
 
 def add_sentence(db, entries: List[MecabEntry]):

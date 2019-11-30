@@ -34,4 +34,30 @@ python3 jsentences.py mecabize
 
 ## Usage:
 
-TODO
+Once you understand a sentence, you can add it using:
+```bash
+python3 jsentences.py add_sentence この文章が分かるようになりました！
+```
+
+The `add_sentence` command will impact the database creating a new "knowledge level", whitelisting the sentences that contain a subset of the tagged words and grammars added with `add_sentence` up to that point.
+
+* To list the sentences you should be able to read up to that point:
+
+```sql
+select *
+  from (select s_id, max(lvl) l
+          from sentence_words sw group by s_id
+        having count(case when lvl is null then 1 end)=0) t
+  join sentences on s_id=id order by l;
+```
+
+* Recommended sentences that you *may* understand (ordered by frequency of the new word):
+```sql
+select freq, jpn, translations
+  from (select s_id, sum(case when lvl is null then n else 0 end) freq
+          from sentence_words sw join features_count fc on sw.f_id=fc.f_id
+         group by s_id
+        having count(case when lvl is null then 1 end)=1) t
+  join sentences on s_id=id
+ order by freq desc;
+```
