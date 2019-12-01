@@ -32,7 +32,15 @@ psql jsentences < jsentences-load.sql
 python3 jsentences.py mecabize
 ```
 
-## Usage:
+## Usage (web):
+Start the local server with (you may specify another port):
+```bash
+python3 jsentences.py web
+```
+
+And follow this link: http://localhost:8080/
+
+## Usage by console:
 
 Once you understand a sentence, you can add it using:
 ```bash
