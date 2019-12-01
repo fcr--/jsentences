@@ -1,10 +1,24 @@
 #!/usr/bin/env python3
 import argparse
+import basicweb
 import psycopg2
 import psycopg2.extras
+import psycopg2.extensions
 import subprocess
+import urllib.parse
 
-from typing import List
+from typing import Dict, List, Tuple
+from psycopg2.extensions import connection
+from html import escape
+
+
+# Redefine configuration parameters in `jsentences_config.py` to override them.
+def cfg(param, default):
+    try:
+        import jsentences_config
+        return getattr(jsentences_config, 'param', default)
+    except ModuleNotFoundError:
+        return default
 
 
 class MecabEntry():
@@ -71,9 +85,10 @@ def mecabize(m: Mecab, db):
             """)
             db.commit()
 
-def add_sentence(db, entries: List[MecabEntry]):
+def add_sentence(m: Mecab, db: connection, jpn: str) -> Tuple[int, int]:
+    entries = m(jpn)
     with db.cursor() as cur:
-        cur.execute('select coalesce(max(lvl)+1, 0) from sentence_words')
+        cur.execute('select coalesce(max(lvl)+1, 0) from added_sentences')
         new_level = cur.fetchone()[0]
         cur.execute(
             'with known as (select id from features where feature in (' +
@@ -83,8 +98,97 @@ def add_sentence(db, entries: List[MecabEntry]):
             ' where f_id in (select * from known) and lvl is null',
             (*[e.normalized() for e in entries], new_level),
         )
+        rowcount = cur.rowcount
+        if rowcount > 0:
+            cur.execute(
+                'insert into added_sentences(lvl, jpn) values(%s, %s)',
+                (new_level, jpn),
+            )
         db.commit()
-        print('Updated {} words with new level {}'.format(cur.rowcount, new_level))
+        print('Updated {} words with new level {}'.format(rowcount, new_level))
+        return rowcount, new_level
+
+def get_added_sentences(db: connection) -> Dict[int, str]:
+    """ Return added sentences associated to its level """
+    with db.cursor() as cur:
+        cur.execute('select lvl, jpn from added_sentences')
+        return { lvl: jpn for lvl, jpn in cur.fetchall() }
+
+def sentences_you_should_know(db: connection) -> List[Tuple[int, str, List[str]]]:
+    with db.cursor() as cur:
+        cur.execute("""select l, jpn, translations
+            from (select s_id, max(lvl) l
+                  from   sentence_words sw group by s_id
+                  having count(case when lvl is null then 1 end) = 0) t
+            join sentences on s_id=id order by l
+        """)
+        return cur.fetchall()
+
+def sentences_you_may_know(db:connection) -> List[Tuple[int, str, List[str]]]:
+    with db.cursor() as cur:
+        cur.execute("""
+            select   freq, jpn, translations
+            from     (
+                select   s_id, sum(case when lvl is null then n else 0 end) freq
+                from     sentence_words sw join features_count fc on sw.f_id=fc.f_id
+                group by s_id
+                having   count(case when lvl is null then 1 end) = 1) t
+            join     sentences on s_id=id
+            order by freq desc;
+        """)
+        return cur.fetchall()
+
+
+class Web(basicweb.BasicWeb):
+    m: Mecab
+    db: connection
+
+    def tool_add_sentence(self) -> Tuple[int, str]:
+        added_sentences: Dict[int, str] = get_added_sentences(Web.db)
+        jpn = self.parsed_query.get('jpn', [''])[0]
+        res = []
+        if jpn:
+            if jpn in added_sentences.values():
+                res.extend(['The sentence: ', escape(jpn), '\nwas already added.\n\n'])
+            else:
+                rowcount, new_level = add_sentence(Web.m, Web.db, jpn)
+                res.append(('The sentence {jpn}\nwas added at level {new_level} '
+                    'affecting {rowcount} rows.\n\n').format(
+                        jpn=escape(jpn), new_level=new_level, rowcount=rowcount))
+
+        res.append(
+            'Add new grammatically correct japanese sentence, it doesn\'t have to\n'
+            'be from any particular source as long as it is perfectly well written:\n'
+            '<form action=add_sentence method=get>    <input type=text name=jpn>'
+            '<input type=submit value=Add></form>\n')
+
+        res.append('Previously added sentences:\n')
+        res.extend('{:5}: {}\n'.format(lvl, escape(jpn)) for lvl, jpn in added_sentences.items())
+        return 200, ''.join(res)
+
+    def tool_sentences_you_should_know(self) -> Tuple[int, str]:
+        return 200, ''.join((
+            'Sentences you should know at this point, sorted by level.  Each time\n'
+            'you add a new sentences, this list will gradually increment:\n\n'
+            '<table border=1><tr><th>Level</th><th>Japanese</th><th>Translations</th></tr>',
+            *('<tr><td>{}</td><td>{}</td><td>{}</td></tr>'.format(
+                    lvl, escape(jpn), '<br>'.join(map(escape, translations)))
+                for lvl, jpn, translations in sentences_you_should_know(Web.db)),
+            '</table>'
+        ))
+
+    def tool_sentences_you_may_know(self) -> Tuple[int, str]:
+        return 200, ''.join((
+            'Sentences you may know at this point, sorted by how much it might help to learn them.\n'
+            'There is also an [Add] button that will mark that sentence as learned.\n'
+            'So make sure you understand that sentence before clicking it!:\n\n'
+            '<table border=1><tr><th>Add</th><th>Frequency</th><th>Japanese</th><th>Translations</th></tr>',
+            *('<tr><td>[<a href="add_sentence?jpn={}">Add</a>]</td><td>{}</td><td>{}</td><td>{}</td></tr>'.format(
+                urllib.parse.quote(jpn), freq, escape(jpn),
+                '<br>'.join(map(escape, translations)))
+                for freq, jpn, translations in sentences_you_may_know(Web.db)),
+            '</table>'
+        ))
 
 
 if __name__ == '__main__':
@@ -103,16 +207,27 @@ if __name__ == '__main__':
         help='A gramatically correct, understood japanese sentence.'
     )
 
+    web_subparser = subparsers.add_parser('web',
+        help='Start a small web service for the methods exported here (and some additional stuff).'
+    )
+    web_subparser.add_argument('port', type=int, nargs='?', default=8080,
+        help='TCP port where the server will listen to.'
+    )
+
     args = parser.parse_args()
+    m = Mecab(
+        mecab_args=cfg('mecab_args', [])
+    )
+    db = psycopg2.connect(cfg('db_dsn', 'dbname=jsentences'))
 
     if args.cmd == 'mecabize':
-        m = Mecab()
-        db = psycopg2.connect('dbname=jsentences')
         mecabize(m, db)
-        db.close()
 
     elif args.cmd == 'add_sentence':
-        m = Mecab()
-        db = psycopg2.connect('dbname=jsentences')
-        add_sentence(db, m(args.sentence))
-        db.close()
+        add_sentence(db, args.sentence)
+
+    elif args.cmd == 'web':
+        Web.m, Web.db = m, db
+        Web.start(args.port)
+
+    db.close()

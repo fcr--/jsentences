@@ -1,4 +1,4 @@
-drop table if exists sentence_words, features, sentences;
+drop table if exists sentence_words, features, sentences, added_sentences;
 
 create table sentences(
     id int primary key,
@@ -20,6 +20,11 @@ create table sentence_words(
     primary key(s_id, idx)
 );
 create index on sentence_words(lvl);
+
+create table added_sentences(
+    lvl int primary key,
+    jpn text not null
+);
 
 create or replace function feature(jptext text) returns int as $$
     declare
