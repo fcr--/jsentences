@@ -124,17 +124,25 @@ def sentences_you_should_know(db: connection) -> List[Tuple[int, str, List[str]]
         """)
         return cur.fetchall()
 
-def sentences_you_may_know(db:connection) -> List[Tuple[int, str, List[str]]]:
+def sentences_you_may_know(db:connection) -> List[Tuple[int, int, str, List[str]]]:
     with db.cursor() as cur:
+        # Words that impact too many sentences are somewhat limited by having only 5 rows
+        # shown for each freq/d^2 value
         cur.execute("""
-            select   freq, jpn, translations
-            from     (
-                select   s_id, sum(case when lvl is null then n else 0 end) freq
-                from     sentence_words sw join features_count fc on sw.f_id=fc.f_id
-                group by s_id
-                having   count(case when lvl is null then 1 end) = 1) t
-            join     sentences on s_id=id
-            order by freq desc;
+            select freq, d, jpn, translations
+            from   (
+                select   freq, d, jpn, translations,
+                         row_number() over (partition by freq/d^2 order by random()) rn
+                from     (
+                    select   s_id, sum(case when lvl is null then n else 0 end) freq,
+                             count(case when lvl is null then 1 end) d
+                    from     sentence_words sw join features_count fc on sw.f_id=fc.f_id
+                    group by s_id
+                    having   count(case when lvl is null then 1 end) > 0) t
+                join     sentences on s_id=id
+                order by freq/d^2 desc) t
+            where  rn <= 5
+            limit  5000
         """)
         return cur.fetchall()
 
@@ -179,14 +187,15 @@ class Web(basicweb.BasicWeb):
 
     def tool_sentences_you_may_know(self) -> Tuple[int, str]:
         return 200, ''.join((
-            'Sentences you may know at this point, sorted by how much it might help to learn them.\n'
+            'Sentences you may know at this point, sorted by a ratio of how much it might help to learn them\n'
+            'and how many new words (with associated grammar points) you would need to know (d).\n'
             'There is also an [Add] button that will mark that sentence as learned.\n'
             'So make sure you understand that sentence before clicking it!:\n\n'
-            '<table border=1><tr><th>Add</th><th>Frequency</th><th>Japanese</th><th>Translations</th></tr>',
-            *('<tr><td>[<a href="add_sentence?jpn={}">Add</a>]</td><td>{}</td><td>{}</td><td>{}</td></tr>'.format(
-                urllib.parse.quote(jpn), freq, escape(jpn),
+            '<table border=1><tr><th>Add</th><th>Frequency</th><th>d</th><th>Japanese</th><th>Translations</th></tr>',
+            *('<tr><td>[<a href="add_sentence?jpn={}">Add</a>]</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>'.format(
+                urllib.parse.quote(jpn), freq, d, escape(jpn),
                 '<br>'.join(map(escape, translations)))
-                for freq, jpn, translations in sentences_you_may_know(Web.db)),
+                for freq, d, jpn, translations in sentences_you_may_know(Web.db)),
             '</table>'
         ))
 
