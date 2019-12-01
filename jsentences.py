@@ -7,7 +7,7 @@ import psycopg2.extensions
 import subprocess
 import urllib.parse
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 from psycopg2.extensions import connection
 from html import escape
 
@@ -116,9 +116,9 @@ def get_added_sentences(db: connection) -> Dict[int, str]:
 
 def sentences_you_should_know(
     db: connection,
-    offset: int = 0,
-    limit: int = 0,
-) -> List[Tuple[int, str, List[str]]]:
+    offset: Tuple[int, int] = (0, 0),
+    limit: Optional[int] = None,
+) -> Tuple[int, List[Tuple[int, str, List[str]]]]:
     with db.cursor() as cur:
         cur.execute('select max(lvl) from sentences')
         (max_lvl_at_sentences,) = cur.fetchone()
@@ -138,12 +138,14 @@ def sentences_you_should_know(
             db.commit()
         # Then we can do a fast query on only sentences:
         cur.execute("""
-            select lvl, jpn, translations
+            select lvl, id, jpn, translations
             from sentences
-            where lvl is not null
-            order by lvl
-        """)
-        return cur.fetchall()
+            where (lvl, id) >= (%s, %s)
+            order by lvl, id
+        """ + ('limit %s' if limit is not None else ''),
+            offset + ((limit,) if limit is not None else ()),
+        )
+        return max_lvl_at_sentences, cur.fetchall()
 
 def sentences_you_may_know(db:connection) -> List[Tuple[int, int, str, List[str]]]:
     with db.cursor() as cur:
@@ -196,14 +198,25 @@ class Web(basicweb.BasicWeb):
         return 200, ''.join(res)
 
     def tool_sentences_you_should_know(self) -> Tuple[int, str]:
+        limit = cfg('sentences_you_should_know_limit', 1000)
+        try:
+            offset_lvl, offset_id = self.parsed_query.get('from', ['0,0'])[0].split(',')
+            offset = (int(offset_lvl), int(offset_id))
+        except:
+            return 400, 'pair of integers please'
+
+        max_lvl_at_sentences, sysk = sentences_you_should_know(Web.db, offset=offset, limit=limit+1)
         return 200, ''.join((
             'Sentences you should know at this point, sorted by level.  Each time\n'
-            'you add a new sentences, this list will gradually increment:\n\n'
+            'you add a new sentences, this list will gradually increment:\n\n',
+            '[<a href=sentences_you_should_know?from={},0>to last entries</a>]\n'.format(max_lvl_at_sentences),
             '<table border=1><tr><th>Level</th><th>Japanese</th><th>Translations</th></tr>',
             *('<tr><td>{}</td><td>{}</td><td>{}</td></tr>'.format(
                     lvl, escape(jpn), '<br>'.join(map(escape, translations)))
-                for lvl, jpn, translations in sentences_you_should_know(Web.db)),
-            '</table>'
+                for lvl, id_, jpn, translations in sysk[:limit]),
+            '</table>',
+            '\n[<a href=sentences_you_should_know?from={},{}>more</a>]'.format(
+                *sysk[-1][:2]) if len(sysk)>limit else ''
         ))
 
     def tool_sentences_you_may_know(self) -> Tuple[int, str]:
