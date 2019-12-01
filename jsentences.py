@@ -114,13 +114,34 @@ def get_added_sentences(db: connection) -> Dict[int, str]:
         cur.execute('select lvl, jpn from added_sentences')
         return { lvl: jpn for lvl, jpn in cur.fetchall() }
 
-def sentences_you_should_know(db: connection) -> List[Tuple[int, str, List[str]]]:
+def sentences_you_should_know(
+    db: connection,
+    offset: int = 0,
+    limit: int = 0,
+) -> List[Tuple[int, str, List[str]]]:
     with db.cursor() as cur:
-        cur.execute("""select l, jpn, translations
-            from (select s_id, max(lvl) l
-                  from   sentence_words sw group by s_id
-                  having count(case when lvl is null then 1 end) = 0) t
-            join sentences on s_id=id order by l
+        cur.execute('select max(lvl) from sentences')
+        (max_lvl_at_sentences,) = cur.fetchone()
+        # Let's update lvl in sentences for all the sentences that have words updated in the
+        # levels from max_lvl_at_sentences:
+        cur.execute("""
+            with to_update(id) as (
+                select s_id from sentence_words where lvl >= %s
+                group by s_id order by s_id)
+            update sentences
+            set lvl = (
+                select max(lvl) from sentence_words where s_id=id
+                group by s_id having count(case when lvl is null then 1 end) = 0)
+            where lvl is null and id in (select * from to_update)
+        """, (0 if max_lvl_at_sentences is None else max_lvl_at_sentences + 1,))
+        if cur.rowcount:
+            db.commit()
+        # Then we can do a fast query on only sentences:
+        cur.execute("""
+            select lvl, jpn, translations
+            from sentences
+            where lvl is not null
+            order by lvl
         """)
         return cur.fetchall()
 
