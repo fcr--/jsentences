@@ -132,7 +132,7 @@ def sentences_you_may_know(db:connection) -> List[Tuple[int, int, str, List[str]
             select freq, d, jpn, translations
             from   (
                 select   freq, d, jpn, translations,
-                         row_number() over (partition by freq/d^2 order by random()) rn
+                         row_number() over (partition by d,freq order by random()) rn
                 from     (
                     select   s_id, sum(case when lvl is null then n else 0 end) freq,
                              count(case when lvl is null then 1 end) d
@@ -140,7 +140,7 @@ def sentences_you_may_know(db:connection) -> List[Tuple[int, int, str, List[str]
                     group by s_id
                     having   count(case when lvl is null then 1 end) > 0) t
                 join     sentences on s_id=id
-                order by freq/d^2 desc) t
+                order by d,freq desc) t
             where  rn <= 5
             limit  5000
         """)
@@ -187,7 +187,7 @@ class Web(basicweb.BasicWeb):
 
     def tool_sentences_you_may_know(self) -> Tuple[int, str]:
         return 200, ''.join((
-            'Sentences you may know at this point, sorted by a ratio of how much it might help to learn them\n'
+            'Sentences you may know at this point, sorted by how much it might help to learn them (frequency)\n'
             'and how many new words (with associated grammar points) you would need to know (d).\n'
             'There is also an [Add] button that will mark that sentence as learned.\n'
             'So make sure you understand that sentence before clicking it!:\n\n'
